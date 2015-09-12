@@ -833,10 +833,10 @@ static const struct usb_ep_ops dummy_ep_ops = {
 /* there are both host and device side versions of this call ... */
 static int dummy_g_get_frame(struct usb_gadget *_gadget)
 {
-	struct timeval	tv;
+	struct timespec64 tv;
 
-	do_gettimeofday(&tv);
-	return tv.tv_usec / 1000;
+	getnstimeofday64(&tv);
+	return tv.tv_nsec / 1000000L;
 }
 
 static int dummy_wakeup(struct usb_gadget *_gadget)
