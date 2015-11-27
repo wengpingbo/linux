@@ -213,6 +213,42 @@ static int evdev_set_clk_type(struct evdev_client *client, unsigned int clkid)
 	return 0;
 }
 
+static int evdev_get_if_type(struct evdev_client *client)
+{
+	switch (client->if_type) {
+	case EV_IF_LEGACY:
+		return EVDEV_LEGACY;
+	case EV_IF_RAW:
+		return EVDEV_RAW;
+	case EV_IF_COMPOSITE:
+		return EVDEV_COMPOSITE;
+	default:
+		return -EINVAL;
+	}
+}
+
+static int evdev_set_if_type(struct evdev_client *client, unsigned int if_type)
+{
+	if (client->if_type == if_type)
+		return 0;
+
+	switch (if_type) {
+	case EVDEV_LEGACY:
+		client->if_type = EV_IF_LEGACY;
+		break;
+	case EVDEV_RAW:
+		client->if_type = EV_IF_RAW;
+		break;
+	case EVDEV_COMPOSITE:
+		client->if_type = EV_IF_COMPOSITE;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static void __pass_event(struct evdev_client *client,
 			 const struct input_value *event)
 {
@@ -1046,6 +1082,7 @@ static long evdev_do_ioctl(struct file *file, unsigned int cmd,
 	int __user *ip = (int __user *)p;
 	unsigned int i, t, u, v;
 	unsigned int size;
+	int if_type;
 	int error;
 
 	/* First we check for fixed-length commands */
@@ -1144,6 +1181,17 @@ static long evdev_do_ioctl(struct file *file, unsigned int cmd,
 
 	case EVIOCSKEYCODE_V2:
 		return evdev_handle_set_keycode_v2(dev, p);
+	case EVIOCSIFTYPE:
+		if (get_user(if_type, ip))
+			return -EFAULT;
+
+		return evdev_set_if_type(client, if_type);
+	case EVIOCGIFTYPE:
+		if_type = evdev_get_if_type(client);
+		if (if_type < 0)
+			return -EFAULT;
+
+		return put_user(if_type, ip);
 	}
 
 	size = _IOC_SIZE(cmd);
