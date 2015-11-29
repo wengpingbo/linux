@@ -175,7 +175,6 @@ static void evdev_queue_syn_dropped(struct evdev_client *client)
 
 static int evdev_set_clk_type(struct evdev_client *client, unsigned int clkid)
 {
-	unsigned long flags;
 	unsigned int clk_type;
 
 	switch (clkid) {
@@ -193,22 +192,8 @@ static int evdev_set_clk_type(struct evdev_client *client, unsigned int clkid)
 		return -EINVAL;
 	}
 
-	if (client->clk_type != clk_type) {
+	if (client->clk_type != clk_type)
 		client->clk_type = clk_type;
-
-		/*
-		 * Flush pending events and queue SYN_DROPPED event,
-		 * but only if the queue is not empty.
-		 */
-		spin_lock_irqsave(&client->buffer_lock, flags);
-
-		if (client->head != client->tail) {
-			client->packet_head = client->head = client->tail;
-			__evdev_queue_syn_dropped(client);
-		}
-
-		spin_unlock_irqrestore(&client->buffer_lock, flags);
-	}
 
 	return 0;
 }
