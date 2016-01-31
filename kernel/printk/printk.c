@@ -56,6 +56,8 @@
 #include "console_cmdline.h"
 #include "braille.h"
 
+static bool using_walltime = false;
+
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
 	MESSAGE_LOGLEVEL_DEFAULT,	/* default_message_loglevel */
@@ -468,7 +470,8 @@ static int log_store(int facility, int level,
 	if (ts_nsec > 0)
 		msg->ts_nsec = ts_nsec;
 	else
-		msg->ts_nsec = local_clock();
+		msg->ts_nsec = using_walltime ?
+			ktime_get_real_ns() : local_clock();
 	memset(log_dict(msg) + dict_len, 0, pad_len);
 	msg->len = size;
 
@@ -1037,6 +1040,20 @@ static inline void boot_delay_msec(int level)
 
 static bool printk_time = IS_ENABLED(CONFIG_PRINTK_TIME);
 module_param_named(time, printk_time, bool, S_IRUGO | S_IWUSR);
+module_param_named(walltime, using_walltime, bool, S_IRUGO | S_IWUSR);
+
+static inline size_t print_walltime(u64 sec, u32 nsec, char *buf)
+{
+	struct tm t;
+
+	if (!buf)
+		return snprintf(NULL, 0, "[00-00 00:00:00.000] ");
+
+	time_to_tm(sec, sys_tz.tz_minuteswest * -60, &t);
+	return sprintf(buf, "[%02d-%02d %02d:%02d:%02d.%03lu] ",
+			t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min,
+			t.tm_sec, nsec / NSEC_PER_MSEC);
+}
 
 static size_t print_time(u64 ts, char *buf)
 {
@@ -1046,6 +1063,9 @@ static size_t print_time(u64 ts, char *buf)
 		return 0;
 
 	rem_nsec = do_div(ts, 1000000000);
+
+	if (using_walltime)
+		return print_walltime(ts, rem_nsec, buf);
 
 	if (!buf)
 		return snprintf(NULL, 0, "[%5lu.000000] ", (unsigned long)ts);
@@ -1614,7 +1634,8 @@ static bool cont_add(int facility, int level, const char *text, size_t len)
 		cont.facility = facility;
 		cont.level = level;
 		cont.owner = current;
-		cont.ts_nsec = local_clock();
+		cont.ts_nsec = using_walltime ?
+			ktime_get_real_ns() : local_clock();
 		cont.flags = 0;
 		cont.cons = 0;
 		cont.flushed = false;
