@@ -1293,6 +1293,13 @@ static int cpr_populate_opps(struct device_node *of_node, struct cpr_drv *drv,
 				return PTR_ERR(drv->cpu_clk);
 		}
 
+		/*
+		 * We must set regulator before adding opps
+		 */
+		if (dev_pm_opp_set_regulator(cpu_dev, "cpu"))
+			dev_err(cpu_dev, "Failed to set regulator for cpu%d: %d\n",
+					cpu, ret);
+
 		for (j = 0, corner = drv->corners; plan[j]; j++, corner++) {
 			p = plan[j];
 			ret = dev_pm_opp_add(cpu_dev, p->freq, corner->uV);

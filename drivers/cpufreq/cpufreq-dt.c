@@ -146,7 +146,7 @@ static int cpufreq_init(struct cpufreq_policy *policy)
 	struct clk *cpu_clk;
 	struct dev_pm_opp *suspend_opp;
 	unsigned int transition_latency;
-	bool fallback = false;
+	bool fallback = true;
 	const char *name;
 	int ret;
 

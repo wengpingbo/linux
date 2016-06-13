@@ -1327,6 +1327,12 @@ int dev_pm_opp_set_regulator(struct device *dev, const char *name)
 		goto unlock;
 	}
 
+	if (!IS_ERR(opp_table->regulator)) {
+		dev_info(dev, "regulator has already set\n");
+		ret = 0;
+		goto unlock;
+	}
+
 	/* This should be called before OPPs are initialized */
 	if (WARN_ON(!list_empty(&opp_table->opp_list))) {
 		ret = -EBUSY;
