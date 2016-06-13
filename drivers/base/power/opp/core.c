@@ -20,6 +20,7 @@
 #include <linux/device.h>
 #include <linux/export.h>
 #include <linux/regulator/consumer.h>
+#include <linux/cpu.h>
 
 #include "opp.h"
 
@@ -559,6 +560,44 @@ static int _set_opp_voltage(struct device *dev, struct regulator *reg,
 	return ret;
 }
 
+static int _opp_set_l2_rate(struct device *dev,
+		struct opp_table *opp_table, unsigned long freq)
+{
+	static unsigned long krait_l2[CONFIG_NR_CPUS] = { };
+	struct clk *l2_clk = opp_table->l2_clk;
+	unsigned int *l2_rate = opp_table->l2_rate;
+	unsigned long new_l2_freq = 0;
+	int cpu, ret = 0;
+
+	if (IS_ERR(l2_clk))
+		return -EINVAL;
+
+	if (!l2_rate[0] || !l2_rate[1] || !l2_rate[2])
+		return -EINVAL;
+
+	if (freq >= l2_rate[2])
+		new_l2_freq = l2_rate[2];
+	else if (freq >= l2_rate[1])
+		new_l2_freq = l2_rate[1];
+	else
+		new_l2_freq = l2_rate[0];
+
+	for_each_present_cpu(cpu)
+		if (get_cpu_device(cpu) == dev)
+			break;
+	krait_l2[cpu] = new_l2_freq;
+
+	for_each_present_cpu(cpu)
+		new_l2_freq = max(new_l2_freq, krait_l2[cpu]);
+
+	if (clk_get_rate(l2_clk) != new_l2_freq) {
+		/* scale l2 with the core */
+		ret = clk_set_rate(l2_clk, new_l2_freq);
+	}
+
+	return ret;
+}
+
 /**
  * dev_pm_opp_set_rate() - Configure new OPP based on frequency
  * @dev:	 device for which we do this operation
@@ -658,6 +697,10 @@ int dev_pm_opp_set_rate(struct device *dev, unsigned long target_freq)
 			ret);
 		goto restore_voltage;
 	}
+
+	ret = _opp_set_l2_rate(dev, opp_table, freq);
+	if (ret)
+		dev_dbg(dev, "set l2 rate failed\n");
 
 	/* Scaling down? Scale voltage after frequency */
 	if (freq < old_freq) {
@@ -769,8 +812,17 @@ static struct opp_table *_add_opp_table(struct device *dev)
 	if (IS_ERR(opp_table->clk)) {
 		ret = PTR_ERR(opp_table->clk);
 		if (ret != -EPROBE_DEFER)
-			dev_dbg(dev, "%s: Couldn't find clock: %d\n", __func__,
+			dev_err(dev, "%s: Couldn't find clock: %d\n", __func__,
 				ret);
+	}
+
+	/* Find l2_clk for the device */
+	opp_table->l2_clk = clk_get(dev, "l2");
+	if (IS_ERR(opp_table->clk)) {
+		ret = PTR_ERR(opp_table->clk);
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "%s: Couldn't find l2 clock: %d\n",
+					__func__, ret);
 	}
 
 	srcu_init_notifier_head(&opp_table->srcu_head);

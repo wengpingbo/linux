@@ -173,6 +173,8 @@ struct opp_table {
 	unsigned int supported_hw_count;
 	const char *prop_name;
 	struct clk *clk;
+	struct clk *l2_clk;
+	unsigned int l2_rate[3];
 	struct regulator *regulator;
 
 #ifdef CONFIG_DEBUG_FS

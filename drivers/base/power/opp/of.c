@@ -57,8 +57,18 @@ void _of_init_opp_table(struct opp_table *opp_table, struct device *dev)
 			opp_table->clock_latency_ns_max = val;
 		of_property_read_u32(np, "voltage-tolerance",
 				     &opp_table->voltage_tolerance_v1);
+		of_property_read_u32_array(np, "qcom,l2-rates",
+				opp_table->l2_rate, 3);
 		of_node_put(np);
 	}
+
+	dev_err(dev, "%s: clock-latency %lu\n",
+			__func__, opp_table->clock_latency_ns_max);
+	dev_err(dev, "%s: voltage-tolerance %d\n",
+			__func__, opp_table->voltage_tolerance_v1);
+	dev_err(dev, "%s: qcom,l2-rates %d %d %d\n",
+			__func__, opp_table->l2_rate[0], opp_table->l2_rate[1],
+			opp_table->l2_rate[2]);
 }
 
 static bool _opp_is_supported(struct device *dev, struct opp_table *opp_table,
