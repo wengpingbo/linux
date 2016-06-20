@@ -1631,11 +1631,15 @@ int dev_pm_opp_adjust_voltage(struct device *dev, unsigned long freq,
 	/* Is update really needed? */
 	if (opp->u_volt == u_volt)
 		goto unlock;
+
 	/* copy the old data over */
 	*new_opp = *opp;
 
 	/* plug in new node */
+	tol = u_volt * opp_table->voltage_tolerance_v1 / 100;
 	new_opp->u_volt = u_volt;
+	new_opp->u_volt_min = u_volt - tol;
+	new_opp->u_volt_max = u_volt + tol;
 
 	list_replace_rcu(&opp->node, &new_opp->node);
 
