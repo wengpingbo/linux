@@ -502,6 +502,12 @@ int driver_probe_device(struct device_driver *drv, struct device *dev)
 	if (dev->parent)
 		pm_runtime_put(dev->parent);
 
+	/*
+	 * regulator need to do some cleaning up after probing
+	 */
+	if (ret > 0)
+		regulator_post_probe_clean(dev);
+
 	return ret;
 }
 

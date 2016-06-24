@@ -1048,6 +1048,15 @@ static int set_machine_constraints(struct regulator_dev *rdev,
 	if (!rdev->constraints)
 		return -ENOMEM;
 
+	if (rdev->constraints->critical_consumer)
+		rdev->constraints->boot_protection = true;
+
+	if (rdev->constraints->boot_protection &&
+			!rdev->constraints->critical_consumer) {
+		rdev_err(rdev, "missed critical consumer\n");
+		return -EINVAL;
+	}
+
 	ret = machine_constraints_voltage(rdev, rdev->constraints);
 	if (ret != 0)
 		return ret;
@@ -2255,8 +2264,14 @@ static int _regulator_disable(struct regulator_dev *rdev)
 	if (rdev->use_count == 1 &&
 	    (rdev->constraints && !rdev->constraints->always_on)) {
 
-		/* we are last user */
-		if (regulator_ops_is_valid(rdev, REGULATOR_CHANGE_STATUS)) {
+		/*
+		 * We are last user.
+		 *
+		 * If boot_protection is set, we only clear use_count,
+		 * and regulator_init_complete() will disable it.
+		 */
+		if (!rdev->constraints->boot_protection &&
+		    regulator_ops_is_valid(rdev, REGULATOR_CHANGE_STATUS)) {
 			ret = _notifier_call_chain(rdev,
 						   REGULATOR_EVENT_PRE_DISABLE,
 						   NULL);
@@ -2356,6 +2371,10 @@ int regulator_force_disable(struct regulator *regulator)
 {
 	struct regulator_dev *rdev = regulator->rdev;
 	int ret;
+
+	WARN(rdev->constraints->boot_protection,
+		"disable regulator %s with boot protection flag\n",
+		rdev->desc->name);
 
 	mutex_lock(&rdev->mutex);
 	regulator->uA_load = 0;
@@ -2861,7 +2880,7 @@ static int _regulator_do_set_voltage(struct regulator_dev *rdev,
 }
 
 static int regulator_set_voltage_unlocked(struct regulator *regulator,
-					  int min_uV, int max_uV)
+					  int min_uV, int max_uV, bool force)
 {
 	struct regulator_dev *rdev = regulator->rdev;
 	int ret = 0;
@@ -2874,7 +2893,7 @@ static int regulator_set_voltage_unlocked(struct regulator *regulator,
 	 * should be a noop (some cpufreq implementations use the same
 	 * voltage for multiple frequencies, for example).
 	 */
-	if (regulator->min_uV == min_uV && regulator->max_uV == max_uV)
+	if (!force && regulator->min_uV == min_uV && regulator->max_uV == max_uV)
 		goto out;
 
 	/* If we're trying to set a range that overlaps the current voltage,
@@ -2912,6 +2931,10 @@ static int regulator_set_voltage_unlocked(struct regulator *regulator,
 	if (ret < 0)
 		goto out2;
 
+	/* We need to change voltage, but boot_protection is set. */
+	if (rdev->constraints->boot_protection)
+		goto out;
+
 	if (rdev->supply && (rdev->desc->min_dropout_uV ||
 				!rdev->desc->ops->get_voltage)) {
 		int current_supply_uV;
@@ -2942,7 +2965,7 @@ static int regulator_set_voltage_unlocked(struct regulator *regulator,
 
 	if (supply_change_uV > 0) {
 		ret = regulator_set_voltage_unlocked(rdev->supply,
-				best_supply_uV, INT_MAX);
+				best_supply_uV, INT_MAX, false);
 		if (ret) {
 			dev_err(&rdev->dev, "Failed to increase supply voltage: %d\n",
 					ret);
@@ -2956,7 +2979,7 @@ static int regulator_set_voltage_unlocked(struct regulator *regulator,
 
 	if (supply_change_uV < 0) {
 		ret = regulator_set_voltage_unlocked(rdev->supply,
-				best_supply_uV, INT_MAX);
+				best_supply_uV, INT_MAX, false);
 		if (ret)
 			dev_warn(&rdev->dev, "Failed to decrease supply voltage: %d\n",
 					ret);
@@ -2997,7 +3020,7 @@ int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV)
 
 	regulator_lock_supply(regulator->rdev);
 
-	ret = regulator_set_voltage_unlocked(regulator, min_uV, max_uV);
+	ret = regulator_set_voltage_unlocked(regulator, min_uV, max_uV, false);
 
 	regulator_unlock_supply(regulator->rdev);
 
@@ -3129,6 +3152,9 @@ int regulator_sync_voltage(struct regulator *regulator)
 	if (ret < 0)
 		goto out;
 
+	if (rdev->constraints->boot_protection)
+		goto out;
+
 	ret = _regulator_do_set_voltage(rdev, min_uV, max_uV);
 
 out:
@@ -3238,6 +3264,15 @@ int regulator_set_current_limit(struct regulator *regulator,
 	if (ret < 0)
 		goto out;
 
+	/*
+	 * Stage new current value, and applied it later.
+	 */
+	if (rdev->constraints->boot_protection) {
+		regulator->min_uA = min_uA;
+		regulator->max_uA = max_uA;
+		goto out;
+	}
+
 	ret = rdev->desc->ops->set_current_limit(rdev, min_uA, max_uA);
 out:
 	mutex_unlock(&rdev->mutex);
@@ -3317,6 +3352,11 @@ int regulator_set_mode(struct regulator *regulator, unsigned int mode)
 	if (ret < 0)
 		goto out;
 
+	if (rdev->constraints->boot_protection) {
+		rdev->boot_mode = mode;
+		goto out;
+	}
+
 	ret = rdev->desc->ops->set_mode(rdev, mode);
 out:
 	mutex_unlock(&rdev->mutex);
@@ -3383,11 +3423,14 @@ EXPORT_SYMBOL_GPL(regulator_get_mode);
 int regulator_set_load(struct regulator *regulator, int uA_load)
 {
 	struct regulator_dev *rdev = regulator->rdev;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&rdev->mutex);
 	regulator->uA_load = uA_load;
-	ret = drms_uA_update(rdev);
+
+	if (!rdev->constraints->boot_protection)
+		ret = drms_uA_update(rdev);
+
 	mutex_unlock(&rdev->mutex);
 
 	return ret;
@@ -3421,7 +3464,8 @@ int regulator_allow_bypass(struct regulator *regulator, bool enable)
 	if (enable && !regulator->bypass) {
 		rdev->bypass_count++;
 
-		if (rdev->bypass_count == rdev->open_count) {
+		if (rdev->bypass_count == rdev->open_count &&
+				!rdev->constraints->boot_protection) {
 			ret = rdev->desc->ops->set_bypass(rdev, enable);
 			if (ret != 0)
 				rdev->bypass_count--;
@@ -3430,7 +3474,8 @@ int regulator_allow_bypass(struct regulator *regulator, bool enable)
 	} else if (!enable && regulator->bypass) {
 		rdev->bypass_count--;
 
-		if (rdev->bypass_count != rdev->open_count) {
+		if (rdev->bypass_count != rdev->open_count &&
+				!rdev->constraints->boot_protection) {
 			ret = rdev->desc->ops->set_bypass(rdev, enable);
 			if (ret != 0)
 				rdev->bypass_count++;
@@ -4255,6 +4300,92 @@ void *regulator_get_init_drvdata(struct regulator_init_data *reg_init_data)
 	return reg_init_data->driver_data;
 }
 EXPORT_SYMBOL_GPL(regulator_get_init_drvdata);
+
+/*
+ * regulator_clear_boot_protection
+ *
+ * return 1 if matched, otherwise return 0
+ */
+static int regulator_clear_boot_protection(struct device *dev, void *data)
+{
+	struct regulator_dev *rdev = dev_to_rdev(dev);
+	struct regulator *reg;
+	int min_uA = INT_MAX, max_uA = 0;
+	int ret = 0;
+
+	if (!rdev->constraints->boot_protection)
+		return 0;
+
+	if (strcmp(rdev->constraints->critical_consumer, dev_name(data)))
+		return 0;
+
+	regulator_lock_supply(rdev);
+
+	rdev->constraints->boot_protection = 0;
+
+	reg = list_first_entry_or_null(&rdev->consumer_list,
+			struct regulator, list);
+	if (reg && regulator_ops_is_valid(rdev, REGULATOR_CHANGE_VOLTAGE)) {
+		ret = regulator_set_voltage_unlocked(reg, reg->min_uV,
+				reg->max_uV, true);
+		if (ret < 0)
+			rdev_err(rdev, "set voltage failed %d\n", ret);
+	}
+
+	/* update current setting */
+	list_for_each_entry(reg, &rdev->consumer_list, list) {
+		if (reg->min_uA < min_uA)
+			min_uA = reg->min_uA;
+		if (reg->max_uA > max_uA)
+			max_uA = reg->max_uA;
+	}
+
+	if (max_uA && !regulator_check_current_limit(rdev, &min_uA, &max_uA)) {
+		ret = rdev->desc->ops->set_current_limit(rdev, min_uA, max_uA);
+		if (ret < 0)
+			rdev_err(rdev, "Failed to set current limits %d\n", ret);
+	}
+
+	/* constraints check has already done */
+	if (rdev->boot_mode) {
+		ret = rdev->desc->ops->set_mode(rdev, rdev->boot_mode);
+		if (ret < 0)
+			rdev_err(rdev, "Failed to set mode %d\n", ret);
+	}
+
+	/* update regulator load */
+	if (regulator_ops_is_valid(rdev, REGULATOR_CHANGE_DRMS)) {
+		ret = drms_uA_update(rdev);
+		if (ret < 0)
+			rdev_err(rdev, "Failed to update drms %d\n", ret);
+	}
+
+	/* check if we need to set bypass mode */
+	if (rdev->desc->ops->set_bypass && rdev->bypass_count &&
+		regulator_ops_is_valid(rdev, REGULATOR_CHANGE_BYPASS)) {
+		if (rdev->bypass_count == rdev->open_count)
+			ret = rdev->desc->ops->set_bypass(rdev, true);
+		else
+			ret = rdev->desc->ops->set_bypass(rdev, false);
+		if (ret < 0)
+			rdev_err(rdev, "update bypass mode failed %d\n", ret);
+	}
+
+	regulator_unlock_supply(rdev);
+
+	/* matched regulator device, break out */
+	ret = 1;
+	return ret;
+}
+
+/*
+ * Will be Called after a driver probing
+ */
+int regulator_post_probe_clean(struct device *dev)
+{
+	return class_for_each_device(&regulator_class, NULL, dev,
+			      regulator_clear_boot_protection);
+}
 
 #ifdef CONFIG_DEBUG_FS
 static ssize_t supply_map_read_file(struct file *file, char __user *user_buf,

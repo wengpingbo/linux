@@ -152,3 +152,5 @@ extern int devtmpfs_init(void);
 #else
 static inline int devtmpfs_init(void) { return 0; }
 #endif
+
+extern int regulator_post_probe_clean(struct device *dev);
